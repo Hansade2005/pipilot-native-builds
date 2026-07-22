@@ -71,6 +71,14 @@ jobs:
       - name: Package
         run: native package --target ${{ matrix.target }} --output out
 
+      # Embed the icon into the Windows exe so the title-bar + taskbar show it at
+      # runtime (native package only writes app-icon.ico as a sidecar).
+      - name: Embed exe icon (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (Test-Path "out\app-icon.ico") { npx --yes rcedit "out\bin\pipilot-shell.exe" --set-icon "out\app-icon.ico" }
+
       - name: Archive (macOS / Linux)
         if: matrix.os != 'windows-latest'
         run: |

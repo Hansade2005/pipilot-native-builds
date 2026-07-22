@@ -128,6 +128,19 @@ jobs:
           ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool "$APPDIR" "dist/${{ steps.names.outputs.file }}.AppImage"
           ls -la dist
 
+      # native package ships app-icon.ico only as a sidecar; embed it into the exe
+      # so Windows uses it for the title-bar caption + taskbar at runtime.
+      - name: Embed exe icon (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "out\app-icon.ico") {
+            npx --yes rcedit "out\bin\pipilot-shell.exe" --set-icon "out\app-icon.ico"
+            Write-Host "embedded out\app-icon.ico into pipilot-shell.exe"
+          } else {
+            Write-Host "no app-icon.ico found; skipping icon embed"
+          }
+
       # ---- Windows: Setup.exe (Inno Setup) ----
       - name: Package Setup.exe (Windows)
         if: matrix.target == 'windows'
