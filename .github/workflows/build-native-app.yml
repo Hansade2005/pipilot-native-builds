@@ -107,7 +107,11 @@ jobs:
           APP="${{ steps.appid.outputs.app }}"; BIN="${{ steps.appid.outputs.bin }}"
           rm -rf AppDir; mkdir -p AppDir dist
           cp -R out/* AppDir/
-          ICON=$(ls out/share/icons/hicolor/256x256/apps/*.png 2>/dev/null | head -1)
+          # set -e + pipefail safe: a glob that matches nothing must not abort the step.
+          ICON=""
+          for p in out/share/icons/hicolor/256x256/apps/*.png out/share/icons/hicolor/*/apps/*.png; do
+            [ -f "$p" ] && ICON="$p" && break
+          done
           if [ -n "$ICON" ]; then cp "$ICON" AppDir/app.png; else cp "$GITHUB_WORKSPACE/assets/icon.png" AppDir/app.png; fi
           printf '%s\n' '[Desktop Entry]' 'Type=Application' "Name=$APP" "Exec=$BIN" 'Icon=app' 'Categories=Utility;' > AppDir/app.desktop
           printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' "exec \"\$HERE/bin/$BIN\" \"\$@\"" > AppDir/AppRun
