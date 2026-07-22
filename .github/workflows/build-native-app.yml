@@ -1,0 +1,78 @@
+name: Build Native App
+
+# Build + package a Native SDK "classic" app (Zig-native UI) from source on all three
+# OSes. Phase 1: builds the source at `source_dir` and uploads the RAW `native package`
+# output per OS so we can confirm the app compiles cross-platform and learn the package
+# layout. Installer wrapping (.dmg/.exe/.AppImage) is a follow-up once the layout is known.
+# Default source = the committed counter starter (native-starter/).
+run-name: "native ${{ inputs.app_slug }} ${{ inputs.run_tag }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_dir:
+        description: 'Path to the native app source (contains app.zon + src/)'
+        required: false
+        default: 'native-starter'
+      app_slug:
+        description: 'Short slug for artifact names'
+        required: false
+        default: 'counter'
+      run_tag:
+        description: 'Opaque marker so the backend can find this run'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "${{ matrix.target }} native build"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos
+          - os: ubuntu-latest
+            target: linux
+          - os: windows-latest
+            target: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Install Linux WebView deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+
+      - name: Install Native SDK CLI
+        run: npm install -g @native-sdk/cli@0.5.4
+
+      - name: Validate + build + package
+        shell: bash
+        run: |
+          cd "${{ inputs.source_dir }}"
+          echo "--- native validate ---"; native validate app.zon
+          echo "--- native build ---";    native build
+          echo "--- native package ---";  native package --target ${{ matrix.target }} --output out
+          echo "--- package layout ---";  find out -maxdepth 4 -print | head -80
+
+      - name: Upload raw package output
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: ${{ inputs.source_dir }}/out/**
+          if-no-files-found: error
