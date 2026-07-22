@@ -61,6 +61,19 @@ jobs:
       - name: Install Native SDK CLI
         run: npm install -g @native-sdk/cli@0.5.4
 
+      - name: Read app identity (binary + display name from app.zon)
+        id: appid
+        shell: bash
+        run: |
+          cd "${{ inputs.source_dir }}"
+          BIN=$(grep -oE '\.name = "[^"]+"' app.zon | head -1 | sed 's/.*"\(.*\)"/\1/')
+          APP=$(grep -oE '\.display_name = "[^"]+"' app.zon | head -1 | sed 's/.*"\(.*\)"/\1/')
+          [ -z "$BIN" ] && BIN=app
+          [ -z "$APP" ] && APP="$BIN"
+          echo "bin=$BIN" >> "$GITHUB_OUTPUT"
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+          echo "identity: bin=$BIN app=$APP"
+
       - name: Validate + build + package
         shell: bash
         run: |
@@ -70,9 +83,98 @@ jobs:
           echo "--- native package ---";  native package --target ${{ matrix.target }} --output out
           echo "--- package layout ---";  find out -maxdepth 4 -print | head -80
 
-      - name: Upload raw package output
+      # ---- macOS: .dmg ----
+      - name: Package .dmg (macOS)
+        if: matrix.target == 'macos'
+        shell: bash
+        run: |
+          cd "${{ inputs.source_dir }}"
+          APP="${{ steps.appid.outputs.app }}"
+          mkdir -p dist build
+          rm -rf "build/$APP.app"; mkdir -p "build/$APP.app"
+          cp -R out/Contents "build/$APP.app/Contents"
+          chmod +x "build/$APP.app/Contents/MacOS/"* || true
+          hdiutil create -volname "$APP" -srcfolder "build/$APP.app" -ov -format UDZO "dist/${{ inputs.app_slug }}.dmg"
+          ls -la dist
+
+      # ---- Linux: .AppImage (icon falls back to the repo default if the app has none) ----
+      - name: Package .AppImage (Linux)
+        if: matrix.target == 'linux'
+        shell: bash
+        run: |
+          cd "${{ inputs.source_dir }}"
+          sudo apt-get install -y libfuse2 desktop-file-utils || true
+          APP="${{ steps.appid.outputs.app }}"; BIN="${{ steps.appid.outputs.bin }}"
+          rm -rf AppDir; mkdir -p AppDir dist
+          cp -R out/* AppDir/
+          ICON=$(ls out/share/icons/hicolor/256x256/apps/*.png 2>/dev/null | head -1)
+          if [ -n "$ICON" ]; then cp "$ICON" AppDir/app.png; else cp "$GITHUB_WORKSPACE/assets/icon.png" AppDir/app.png; fi
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' "Name=$APP" "Exec=$BIN" 'Icon=app' 'Categories=Utility;' > AppDir/app.desktop
+          printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' "exec \"\$HERE/bin/$BIN\" \"\$@\"" > AppDir/AppRun
+          chmod +x AppDir/AppRun "AppDir/bin/$BIN"
+          wget -qO appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "dist/${{ inputs.app_slug }}.AppImage"
+          ls -la dist
+
+      # ---- Windows: Setup.exe (Inno Setup); icon steps guarded on app-icon.ico ----
+      - name: Package Setup.exe (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          cd "${{ inputs.source_dir }}"
+          $app = "${{ steps.appid.outputs.app }}"; if ([string]::IsNullOrWhiteSpace($app)) { $app = "App" }
+          $bin = "${{ steps.appid.outputs.bin }}"; if ([string]::IsNullOrWhiteSpace($bin)) { $bin = "app" }
+          $hasIco = Test-Path "out\app-icon.ico"
+          if ($hasIco) {
+            Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+            & ".\rcedit.exe" "out\bin\$bin.exe" --set-icon "out\app-icon.ico"
+          }
+          choco install innosetup --no-progress -y
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $lines = @(
+            '[Setup]'
+            "AppName=$app"
+            'AppVersion=0.1.0'
+            'AppPublisher=PiPilot'
+            "DefaultDirName={autopf}\$app"
+            "DefaultGroupName=$app"
+            'OutputDir=dist'
+            "OutputBaseFilename=${{ inputs.app_slug }}-Setup"
+            'Compression=lzma2'
+            'SolidCompression=yes'
+            'WizardStyle=modern'
+          )
+          if ($hasIco) { $lines += 'SetupIconFile=out\app-icon.ico'; $lines += "UninstallDisplayIcon={app}\bin\$bin.exe" }
+          $lines += @(
+            ''
+            '[Files]'
+            'Source: "out\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs'
+            ''
+            '[Icons]'
+          )
+          if ($hasIco) {
+            $lines += "Name: `"{group}\$app`"; Filename: `"{app}\bin\$bin.exe`"; IconFilename: `"{app}\app-icon.ico`""
+            $lines += "Name: `"{autodesktop}\$app`"; Filename: `"{app}\bin\$bin.exe`"; IconFilename: `"{app}\app-icon.ico`"; Tasks: desktopicon"
+          } else {
+            $lines += "Name: `"{group}\$app`"; Filename: `"{app}\bin\$bin.exe`""
+            $lines += "Name: `"{autodesktop}\$app`"; Filename: `"{app}\bin\$bin.exe`"; Tasks: desktopicon"
+          }
+          $lines += @(
+            ''
+            '[Tasks]'
+            'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked'
+            ''
+            '[Run]'
+            "Filename: `"{app}\bin\$bin.exe`"; Description: `"Launch $app`"; Flags: nowait postinstall skipifsilent"
+          )
+          Set-Content -Path installer.iss -Value $lines -Encoding UTF8
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          Get-ChildItem dist
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: native-${{ matrix.target }}
-          path: ${{ inputs.source_dir }}/out/**
+          name: native-installer-${{ matrix.target }}
+          path: ${{ inputs.source_dir }}/dist/*
           if-no-files-found: error
