@@ -2,7 +2,10 @@
     .id = "dev.pipilot.shell",
     .name = "pipilot-shell",
     .display_name = "PiPilot",
-    .version = "0.1.0",
+    .version = "0.2.0",
+    // Brand mark (placeholder for the dedicated Native-engine logo). Square SVG;
+    // `native package` rasterizes it to each platform's icon set.
+    .icons = .{"assets/icon.svg"},
     .platforms = .{ "macos", "linux", "windows" },
     .permissions = .{ "window" },
     .capabilities = .{ "webview", "js_bridge" },

@@ -8,6 +8,17 @@ pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 // the launcher always sets the env var to the user's deployed *.pipilot.dev URL.
 const default_url = "https://pipilot.dev";
 
+// Window title / app-switcher name. The launcher sets NATIVE_SDK_APP_NAME to the
+// user's app name so each wrapped app reads as itself, not the generic shell.
+const default_name = "PiPilot";
+
+fn envOr(env_map: *std.process.Environ.Map, key: []const u8, fallback: []const u8) []const u8 {
+    if (env_map.get(key)) |v| {
+        if (v.len > 0) return v;
+    }
+    return fallback;
+}
+
 const Shell = struct {
     env_map: *std.process.Environ.Map,
 
@@ -33,9 +44,11 @@ const Shell = struct {
 
 pub fn main(init: std.process.Init) !void {
     var shell = Shell{ .env_map = init.environ_map };
+    // Prefer the launcher-injected app name; fall back to the generic "PiPilot".
+    const app_name = envOr(init.environ_map, "NATIVE_SDK_APP_NAME", default_name);
     try runner.runWithOptions(shell.app(), .{
-        .app_name = "PiPilot",
-        .window_title = "PiPilot",
+        .app_name = app_name,
+        .window_title = app_name,
         .bundle_id = "dev.pipilot.shell",
         .security = .{
             .navigation = .{
@@ -56,6 +69,14 @@ test "shell falls back to the default url when env is unset" {
     const src = try Shell.source(&shell);
     try std.testing.expectEqual(native_sdk.WebViewSourceKind.url, src.kind);
     try std.testing.expectEqualStrings(default_url, src.bytes);
+}
+
+test "app name falls back to default, else honors NATIVE_SDK_APP_NAME" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try std.testing.expectEqualStrings(default_name, envOr(&env, "NATIVE_SDK_APP_NAME", default_name));
+    try env.put("NATIVE_SDK_APP_NAME", "Acme Notes");
+    try std.testing.expectEqualStrings("Acme Notes", envOr(&env, "NATIVE_SDK_APP_NAME", default_name));
 }
 
 test "shell uses NATIVE_SDK_FRONTEND_URL when set" {
