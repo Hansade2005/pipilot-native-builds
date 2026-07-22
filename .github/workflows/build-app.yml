@@ -135,7 +135,8 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path "out\app-icon.ico") {
-            npx --yes rcedit "out\bin\pipilot-shell.exe" --set-icon "out\app-icon.ico"
+            Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+            & ".\rcedit.exe" "out\bin\pipilot-shell.exe" --set-icon "out\app-icon.ico"
             Write-Host "embedded out\app-icon.ico into pipilot-shell.exe"
           } else {
             Write-Host "no app-icon.ico found; skipping icon embed"
