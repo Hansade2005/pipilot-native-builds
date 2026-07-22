@@ -1,0 +1,177 @@
+name: Build App Installer
+
+# Per-app desktop installer build. Triggered (workflow_dispatch) by PiPilot's backend
+# for one user's deployed app: ci/bake.mjs compiles the app's URL + name + icon into
+# the shell, then each OS runner packages a real installer:
+#   macOS   -> .dmg   (hdiutil, built-in)
+#   Windows -> Setup.exe (Inno Setup)
+#   Linux   -> .AppImage (appimagetool)
+# Installers are uploaded as artifacts; the backend downloads them (authed) and hands
+# the user a download link. run_tag lets the backend correlate its dispatch to the run.
+run-name: "app ${{ inputs.app_slug }} ${{ inputs.run_tag }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: "Deployed app URL (https://<slug>.pipilot.dev)"
+        required: true
+      app_name:
+        description: "App display name"
+        required: true
+        default: "PiPilot App"
+      app_slug:
+        description: "Short slug for filenames / bundle id"
+        required: true
+      icon_url:
+        description: "Optional icon PNG URL (favicon)"
+        required: false
+        default: ""
+      run_tag:
+        description: "Opaque marker so the backend can find this run"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "${{ matrix.target }} installer"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: macos
+          - os: ubuntu-latest
+            target: linux
+          - os: windows-latest
+            target: windows
+    env:
+      APP_URL: ${{ inputs.app_url }}
+      APP_NAME: ${{ inputs.app_name }}
+      APP_SLUG: ${{ inputs.app_slug }}
+      ICON_URL: ${{ inputs.icon_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Install Linux WebView deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+
+      - name: Install Native SDK CLI
+        run: npm install -g @native-sdk/cli@0.5.4
+
+      - name: Bake app identity (url + name + icon)
+        run: node ci/bake.mjs
+
+      - name: Compute names
+        id: names
+        shell: bash
+        run: |
+          SLUG="${APP_SLUG:-app}"
+          SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')
+          [ -z "$SLUG" ] && SLUG=app
+          FILE="pipilot-$SLUG"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Validate + build + package
+        run: |
+          native validate
+          native build
+          native package --target ${{ matrix.target }} --output out
+
+      # ---- macOS: .dmg ----
+      - name: Package .dmg (macOS)
+        if: matrix.target == 'macos'
+        shell: bash
+        run: |
+          APP="${APP_NAME:-PiPilot}"
+          BUNDLE="build/${APP}.app"
+          mkdir -p dist "build"
+          rm -rf "$BUNDLE"; mkdir -p "$BUNDLE"
+          cp -R out/Contents "$BUNDLE/Contents"
+          chmod +x "$BUNDLE/Contents/MacOS/"* || true
+          hdiutil create -volname "$APP" -srcfolder "$BUNDLE" -ov -format UDZO "dist/${{ steps.names.outputs.file }}.dmg"
+          ls -la dist
+
+      # ---- Linux: .AppImage ----
+      - name: Package .AppImage (Linux)
+        if: matrix.target == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y libfuse2 desktop-file-utils || true
+          APP="${APP_NAME:-PiPilot}"
+          APPDIR=AppDir
+          rm -rf "$APPDIR"; mkdir -p "$APPDIR" dist
+          cp -R out/* "$APPDIR"/
+          cp "out/share/icons/hicolor/256x256/apps/app-icon.png" "$APPDIR/pipilot.png" 2>/dev/null || cp assets/icon.png "$APPDIR/pipilot.png"
+          printf '%s\n' '[Desktop Entry]' 'Type=Application' "Name=$APP" 'Exec=pipilot-shell' 'Icon=pipilot' 'Categories=Utility;' > "$APPDIR/pipilot.desktop"
+          printf '%s\n' '#!/bin/sh' 'HERE="$(dirname "$(readlink -f "$0")")"' 'exec "$HERE/bin/pipilot-shell" "$@"' > "$APPDIR/AppRun"
+          chmod +x "$APPDIR/AppRun" "$APPDIR/bin/pipilot-shell"
+          wget -qO appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool "$APPDIR" "dist/${{ steps.names.outputs.file }}.AppImage"
+          ls -la dist
+
+      # ---- Windows: Setup.exe (Inno Setup) ----
+      - name: Package Setup.exe (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $app = $env:APP_NAME; if ([string]::IsNullOrWhiteSpace($app)) { $app = "PiPilot" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $lines = @(
+            '[Setup]'
+            "AppName=$app"
+            'AppVersion=0.3.0'
+            "AppPublisher=PiPilot"
+            "DefaultDirName={autopf}\$app"
+            "DefaultGroupName=$app"
+            'OutputDir=dist'
+            "OutputBaseFilename=${{ steps.names.outputs.file }}-Setup"
+            'SetupIconFile=out\app-icon.ico'
+            'UninstallDisplayIcon={app}\bin\pipilot-shell.exe'
+            'Compression=lzma2'
+            'SolidCompression=yes'
+            'WizardStyle=modern'
+            ''
+            '[Files]'
+            'Source: "out\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs'
+            ''
+            '[Icons]'
+            "Name: `"{group}\$app`"; Filename: `"{app}\bin\pipilot-shell.exe`"; IconFilename: `"{app}\app-icon.ico`""
+            "Name: `"{autodesktop}\$app`"; Filename: `"{app}\bin\pipilot-shell.exe`"; IconFilename: `"{app}\app-icon.ico`"; Tasks: desktopicon"
+            ''
+            '[Tasks]'
+            'Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked'
+            ''
+            '[Run]'
+            "Filename: `"{app}\bin\pipilot-shell.exe`"; Description: `"Launch $app`"; Flags: nowait postinstall skipifsilent"
+          )
+          Set-Content -Path installer.iss -Value $lines -Encoding UTF8
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc installer.iss
+          Get-ChildItem dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error

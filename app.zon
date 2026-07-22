@@ -2,7 +2,7 @@
     .id = "dev.pipilot.shell",
     .name = "pipilot-shell",
     .display_name = "PiPilot",
-    .version = "0.2.0",
+    .version = "0.3.0",
     // Brand mark (placeholder for the dedicated Native-engine logo). 1024x1024 PNG;
     // `native package` derives each platform's icon set from it. (SVG must be in the
     // SDK's restricted icon dialect — a full PNG sidesteps that.)

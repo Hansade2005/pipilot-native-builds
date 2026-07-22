@@ -1,16 +1,14 @@
 const std = @import("std");
 const runner = @import("runner");
 const native_sdk = @import("native_sdk");
+const app_config = @import("app_config.zig");
 
 pub const panic = std.debug.FullPanic(native_sdk.debug.capturePanic);
 
-// Fallback when NATIVE_SDK_FRONTEND_URL isn't provided at launch. In production
-// the launcher always sets the env var to the user's deployed *.pipilot.dev URL.
-const default_url = "https://pipilot.dev";
-
-// Window title / app-switcher name. The launcher sets NATIVE_SDK_APP_NAME to the
-// user's app name so each wrapped app reads as itself, not the generic shell.
-const default_name = "PiPilot";
+// Baked per-app identity (see app_config.zig). The per-app installer workflow
+// compiles the user's URL + name in here; env vars still override at launch.
+const default_url = app_config.frontend_url;
+const default_name = app_config.app_name;
 
 fn envOr(env_map: *std.process.Environ.Map, key: []const u8, fallback: []const u8) []const u8 {
     if (env_map.get(key)) |v| {
