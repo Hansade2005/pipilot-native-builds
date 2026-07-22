@@ -1,0 +1,7 @@
+node_modules/
+.native/
+zig-out/
+.zig-cache/
+out/
+*.tar.gz
+*.zip

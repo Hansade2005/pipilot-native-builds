@@ -1,0 +1,23 @@
+.{
+    .id = "dev.pipilot.shell",
+    .name = "pipilot-shell",
+    .display_name = "PiPilot",
+    .version = "0.1.0",
+    .platforms = .{ "macos", "linux", "windows" },
+    .permissions = .{ "window" },
+    .capabilities = .{ "webview", "js_bridge" },
+    .security = .{
+        .navigation = .{
+            // Wrap ANY deployed *.pipilot.dev URL (and any remote origin) — the SDK's
+            // origin matcher only supports exact strings or the full "*" wildcard.
+            .allowed_origins = .{ "*" },
+            // OAuth / target=_blank / window.open links open in the system browser.
+            // "*" is the only pattern that matches every https host.
+            .external_links = .{
+                .action = "open_system_browser",
+                .allowed_urls = .{ "*" },
+            },
+        },
+    },
+    .web_engine = "system",
+}

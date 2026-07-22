@@ -1,0 +1,17 @@
+{
+  "name": "pipilot-shell",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "native dev",
+    "build": "native build",
+    "package": "native package",
+    "check": "native check",
+    "validate": "native validate",
+    "doctor": "native doctor"
+  },
+  "devDependencies": {
+    "@native-sdk/cli": "0.5.4"
+  }
+}
