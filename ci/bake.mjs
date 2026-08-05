@@ -46,20 +46,59 @@ zon = zon.replace(/\.display_name\s*=\s*"[^"]*"/, `.display_name = ${zlit(displa
 await writeFile("app.zon", zon);
 
 // --- icon (best-effort) --------------------------------------------------
+// The SDK reads assets/icon.png and validates the REAL format, not the extension. Google Drive
+// (and most CDNs) happily serve a JPEG/WebP from an image URL, and the previous code wrote whatever
+// bytes came back straight to icon.png — so a JPEG icon produced `InvalidIconSource` and killed the
+// build. Worse, it had already CLOBBERED the working default, so the "keep the default" fallback
+// could never save the run.
+//
+// So now: sniff the bytes, write PNG through, convert anything else, and NEVER overwrite the
+// default with something we could not verify is a PNG. A bad icon costs the user our default icon,
+// never their build.
+const sniff = (b) => {
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg";
+  if (b.length > 12 && b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") return "webp";
+  if (b.length > 6 && ["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString("latin1"))) return "gif";
+  const head = b.subarray(0, 512).toString("latin1").trim().toLowerCase();
+  if (head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"))) return "svg";
+  if (head.startsWith("<!doctype html") || head.startsWith("<html")) return "html";
+  return "unknown";
+};
+
 if (ICON_URL && /^https:\/\//i.test(ICON_URL)) {
   try {
     const r = await fetch(ICON_URL, { redirect: "follow" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const buf = Buffer.from(await r.arrayBuffer());
-    // Guard against tiny/error bodies; keep the baked default if the icon is bad.
-    if (buf.length > 512) {
-      await writeFile("assets/icon.png", buf);
-      console.log(`bake: icon set from ${ICON_URL} (${buf.length} bytes)`);
-    } else {
-      console.log(`bake: icon too small (${buf.length}b), keeping default`);
+    let buf = Buffer.from(await r.arrayBuffer());
+    const kind = sniff(buf);
+    if (buf.length <= 512) throw new Error(`too small (${buf.length}b)`);
+    // An HTML body means the URL needed auth or hit a share/interstitial page — not an icon.
+    if (kind === "html") throw new Error("URL returned an HTML page, not an image");
+    if (kind === "unknown") throw new Error("unrecognised image format");
+
+    if (kind !== "png") {
+      // Convert. sharp is optional on purpose: if it is missing or fails on this runner we keep the
+      // default icon and still ship installers, rather than failing the whole matrix over an icon.
+      const sharp = (await import("sharp").catch(() => null))?.default;
+      if (!sharp) throw new Error(`icon is ${kind}, and sharp is unavailable to convert it`);
+      const img = sharp(buf);
+      const meta = await img.metadata();
+      const size = Math.max(meta.width || 0, meta.height || 0) || 512;
+      // The SDK requires 1:1. Pad rather than crop so a non-square icon is not silently cut.
+      buf = await img
+        .resize(size, size, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .png()
+        .toBuffer();
+      if (sniff(buf) !== "png") throw new Error("conversion did not produce a PNG");
+      console.log(`bake: converted icon ${kind} -> png (${size}x${size}, ${buf.length} bytes)`);
     }
+
+    await writeFile("assets/icon.png", buf);
+    console.log(`bake: icon set from ${ICON_URL} (${buf.length} bytes, ${kind})`);
   } catch (e) {
-    console.log(`bake: icon fetch failed (${e.message}), keeping default`);
+    // Explicitly NOT fatal, and explicitly leaves assets/icon.png untouched.
+    console.log(`bake: icon rejected (${e.message}) - keeping the default icon, build continues`);
   }
 }
 

@@ -75,6 +75,13 @@ jobs:
       - name: Install Native SDK CLI
         run: npm install -g @native-sdk/cli@0.5.4
 
+      # Optional: lets ci/bake.mjs convert a non-PNG app icon (Drive and most CDNs serve JPEG/WebP)
+      # into the PNG the SDK requires. Non-fatal by design - without it bake.mjs keeps the default
+      # icon and the build still ships, so an icon problem can never fail the matrix.
+      - name: Install image converter (optional)
+        continue-on-error: true
+        run: npm install sharp --no-save --no-audit --no-fund
+
       - name: Bake app identity (url + name + icon)
         run: node ci/bake.mjs
 
