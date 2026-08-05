@@ -78,8 +78,10 @@ if (ICON_URL && /^https:\/\//i.test(ICON_URL)) {
     if (kind === "unknown") throw new Error("unrecognised image format");
 
     if (kind !== "png") {
-      // Convert. sharp is optional on purpose: if it is missing or fails on this runner we keep the
-      // default icon and still ship installers, rather than failing the whole matrix over an icon.
+      // The server normalises non-PNG icons to PNG before dispatching the build (see
+      // api/cloud/_desktop.mjs normalizeIconUrl), so reaching here means that step was skipped or
+      // failed. sharp is NOT installed in CI — this is the last-resort path, and without it we keep
+      // the default icon and still ship installers rather than failing the whole matrix.
       const sharp = (await import("sharp").catch(() => null))?.default;
       if (!sharp) throw new Error(`icon is ${kind}, and sharp is unavailable to convert it`);
       const img = sharp(buf);
